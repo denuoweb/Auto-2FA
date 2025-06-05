@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------
-// popup.js (revised to fix undefined‐property errors)
+// popup.js
 // ---------------------------------------------------------------
 
 // Importing otplib (assumed to be bundled already)
@@ -594,18 +594,27 @@ async function setDeviceInfo(info, update = true) {
 }
 
 async function getSingleDeviceInfo(pkey) {
-  // 1) If caller did not pass a pkey, look it up from deviceInfo
+  // 1) If caller did not pass pkey, pull from deviceInfo:
   if (!pkey) {
-    const info = await getDeviceInfo();
-    pkey = info.activeDevice;
+    const info = await getDeviceInfo(); // may throw if storage.sync.get fails
+    // If activeDevice is not a valid string, but devices[] has at least one entry, default to that:
+    if (
+      (!info.activeDevice || info.activeDevice === -1)
+      && Array.isArray(info.devices)
+      && info.devices.length > 0
+    ) {
+      pkey = info.devices[0];
+    } else {
+      pkey = info.activeDevice;
+    }
   }
 
-  // 2) If pkey is missing or is -1, bail out immediately
+  // 2) If pkey is still missing or -1, bail out:
   if (!pkey || pkey === -1) {
     return undefined;
   }
 
-  // 3) Otherwise, pkey is a valid string → wrap chrome.storage.local.get in a Promise
+  // 3) Otherwise, wrap chrome.storage.local.get in a Promise
   const obj = await new Promise((resolve) => {
     chrome.storage.local.get(pkey, (json) => {
       resolve(json[pkey]);

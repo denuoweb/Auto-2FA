@@ -161,12 +161,126 @@ for (let i = 0; i < mainButtons.length; i++) {
 
 /**
  * activateDevice(rawCode):
- *   (Unchanged from prior version)
  */
 async function activateDevice(rawCode) {
-  // ... (same as before) ...
-  // (omitted here to focus on the parts we actually had to fix)
+  // Split activation code into its two components: identifier and host.
+  let code = rawCode.split("-");
+  // Decode Base64 to get host
+  let host = atob(code[1]);
+  let identifier = code[0];
+  // Ensure this code is correct by counting the characters
+  if (code[0].length != 20 || code[1].length != 38) {
+    throw "Illegal number of characters in activation code";
+  }
+
+  let url = "https://" + host + "/push/v2/activation/" + identifier;
+  // Create new pair of RSA keys
+  let keyPair = await crypto.subtle.generateKey(
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([0x01, 0x00, 0x01]),
+      hash: "SHA-512",
+    },
+    true,
+    ["sign", "verify"]
+  );
+
+  // Convert public key to PEM format to send to Duo
+  let pemFormat = await crypto.subtle.exportKey("spki", keyPair.publicKey);
+  pemFormat = btoa(String.fromCharCode(...new Uint8Array(pemFormat)))
+    .match(/.{1,64}/g)
+    .join("\n");
+  pemFormat = `-----BEGIN PUBLIC KEY-----\n${pemFormat}\n-----END PUBLIC KEY-----`;
+
+  // Exporting keys returns an array buffer. Convert it to Base64 string for storing
+  let publicRaw = arrayBufferToBase64(await crypto.subtle.exportKey("spki", keyPair.publicKey));
+  let privateRaw = arrayBufferToBase64(await crypto.subtle.exportKey("pkcs8", keyPair.privateKey));
+
+  // Pick a randomized model and tablet
+  const appleDevices = ["iPad", "iPad Air", "iPad Pro", "iPad mini"];
+  const androidDevices = ["Galaxy Tab A8", "Galaxy Tab A7 Lite", "Galaxy Tab S10 Ultra", "Lenovo Tab P11"];
+  const activationInfo = {
+    customer_protocol: "1",
+    pubkey: pemFormat,
+    pkpush: "rsa-sha512",
+    jailbroken: "false",
+    architecture: "arm64",
+    region: "US",
+    app_id: "com.duosecurity.duomobile",
+    full_disk_encryption: true,
+    passcode_status: true,
+    app_version: "4.59.0",
+    app_build_number: "459010",
+    version: "13",
+    manufacturer: "unknown",
+    language: "en",
+    security_patch_level: "2022-11-05",
+  };
+  // New discovery: Platform = iOS is case-sensitive, Android is not
+  if (Math.random() < 0.5) {
+    // Apple
+    activationInfo.platform = "iOS";
+    activationInfo.model = appleDevices[Math.floor(Math.random() * appleDevices.length)];
+  } else {
+    // Android
+    activationInfo.platform = "Android";
+    activationInfo.model = androidDevices[Math.floor(Math.random() * androidDevices.length)];
+  }
+
+  // Grab number of devices for naming the new device
+  let deviceInfo = await getDeviceInfo();
+  let devicesCount = deviceInfo.devices.length;
+  // Initialize new HTTP request
+  let request = new XMLHttpRequest();
+  request.open("POST", url, true);
+  request.setRequestHeader("Content-type", "application/x-www-form-urlencoded");
+  // Put onload() in a Promise. It will be raced with a timeout promise
+  let newData = new Promise((resolve, reject) => {
+    request.onload = async function () {
+      let result = JSON.parse(request.responseText);
+      // If successful
+      if (result.stat == "OK") {
+        // Get device info as JSON
+        let newDevice = result.response;
+        delete newDevice.customer_logo; // takes up too much space
+        // Add custom data per device
+        (newDevice.name = `${activationInfo.model} (#${devicesCount + 1})`), // not gonna do a bounds check on this one
+          (newDevice.clickLevel = "2"); // default value is one click login (this is what 2 means)
+        newDevice.host = host;
+        newDevice.publicRaw = publicRaw;
+        newDevice.privateRaw = privateRaw;
+
+        document.getElementById("newDeviceDisplay").innerHTML = `<b>${activationInfo.model}</b> (${activationInfo.platform})`;
+        // Create new storage slot for device
+        await chrome.storage.sync.set({ [newDevice.pkey]: newDevice });
+        // Add new device to info
+        deviceInfo.devices.push(newDevice.pkey);
+        // Set active device to one just added
+        deviceInfo.activeDevice = newDevice.pkey;
+        await setDeviceInfo(deviceInfo);
+        resolve("Success");
+      } else {
+        // If we receive a result from Duo and the status is FAIL, the activation code is likely expired
+        console.error(result);
+        reject("Expired");
+      }
+    };
+  });
+  // await new Promise(resolve => setTimeout(resolve, 2000));
+  // Append URL parameters and begin request
+  request.send(new URLSearchParams(activationInfo));
+  // Create timeout promise
+  let timeout = new Promise((resolve, reject) => {
+    setTimeout(() => {
+      reject("Timed out");
+    }, 1500);
+  });
+  // Wait for response, or timeout at 1.5s
+  // We need a timeout because request.send() doesn't return an error when an exception occurs, and onload() is obviously never called
+  await Promise.race([newData, timeout]);
 }
+
 
 // ---------------------------------------------------------------
 // On device selection change (settings gear)

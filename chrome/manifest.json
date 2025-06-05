@@ -7,7 +7,7 @@
     "storage",
     "tabs"
   ],
-  "host_permissions": ["https://api-*.duosecurity.com/*"],
+  "host_permissions": ["https://*.duosecurity.com/*"],
   "background": {
     "service_worker": "worker.js"
   },

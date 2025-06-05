@@ -594,14 +594,18 @@ async function setDeviceInfo(info, update = true) {
 }
 
 async function getSingleDeviceInfo(pkey) {
+  // 1) If caller did not pass a pkey, look it up from deviceInfo
   if (!pkey) {
     const info = await getDeviceInfo();
     pkey = info.activeDevice;
   }
-  if (!pkey) {
-    // No active device set
+
+  // 2) If pkey is missing or is -1, bail out immediately
+  if (!pkey || pkey === -1) {
     return undefined;
   }
+
+  // 3) Otherwise, pkey is a valid string → wrap chrome.storage.local.get in a Promise
   const obj = await new Promise((resolve) => {
     chrome.storage.local.get(pkey, (json) => {
       resolve(json[pkey]);
